@@ -1,0 +1,51 @@
+# ============================================================
+# Geumdo High School — GitLab CI/CD pipeline
+# Triggers automatically on every push to the "main" branch.
+# It SSHes into your EC2 instance, pulls the latest code, tears
+# down the old containers, rebuilds fresh images, and starts the
+# whole 3-tier stack (frontend + backend + MySQL) again.
+#
+# Required GitLab CI/CD variables (Settings > CI/CD > Variables):
+#   SSH_PRIVATE_KEY   -> contents of the .pem key for your EC2 instance (mark as "File" or protected)
+#   EC2_HOST          -> your EC2 instance's public IP or domain
+#   EC2_USER          -> ubuntu   (default user for Ubuntu AMIs)
+#   PROJECT_PATH      -> e.g. /home/ubuntu/geumdo-school  (where the repo lives on the EC2 box)
+# ============================================================
+
+stages:
+  - deploy
+
+deploy_to_ec2:
+  stage: deploy
+  image: alpine:latest
+  only:
+    - main
+  before_script:
+    - apk add --no-cache openssh-client git
+    - eval $(ssh-agent -s)
+    - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
+    - mkdir -p ~/.ssh
+    - ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts
+  script:
+    - |
+      ssh $EC2_USER@$EC2_HOST << EOF
+        set -e
+        echo "===> Pulling latest code..."
+        cd $PROJECT_PATH
+        git pull origin main
+
+        echo "===> Stopping and removing old containers..."
+        docker compose down
+
+        echo "===> Rebuilding images and starting fresh containers..."
+        docker compose up -d --build
+
+        echo "===> Cleaning up old dangling images..."
+        docker image prune -f
+
+        echo "===> Current container status:"
+        docker compose ps
+      EOF
+  environment:
+    name: production
+    url: http://$EC2_HOST
